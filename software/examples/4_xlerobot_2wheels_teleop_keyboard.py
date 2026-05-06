@@ -27,10 +27,10 @@ MIN_VELOCITY_THRESHOLD = 0.02 # minimum velocity to send to motors during decele
 
 # Keymaps (semantic action: key) - Updated for differential drive
 LEFT_KEYMAP = {
-    'shoulder_pan+': 'q', 'shoulder_pan-': 'e',
+    'shoulder_pan+': 'w', 'shoulder_pan-': 'e',
     'wrist_roll+': 'r', 'wrist_roll-': 'f',
     'gripper+': 't', 'gripper-': 'g',
-    'x+': 'w', 'x-': 's', 'y+': 'a', 'y-': 'd',
+    'x+': 'q', 'x-': 's', 'y+': 'a', 'y-': 'd',
     'pitch+': 'z', 'pitch-': 'x',
     'reset': 'c',
     # For head motors
@@ -40,10 +40,10 @@ LEFT_KEYMAP = {
     'triangle': 'y',  # Rectangle trajectory key
 }
 RIGHT_KEYMAP = {
-    'shoulder_pan+': '7', 'shoulder_pan-': '9',
+    'shoulder_pan+': '8', 'shoulder_pan-': '9',
     'wrist_roll+': '/', 'wrist_roll-': '*',
     'gripper+': '+', 'gripper-': '-',
-    'x+': '8', 'x-': '2', 'y+': '4', 'y-': '6',
+    'x+': '7', 'x-': '2', 'y+': '4', 'y-': '6',
     'pitch+': '1', 'pitch-': '3',
     'reset': '0',
 
@@ -112,7 +112,7 @@ class RectangularTrajectory:
         normalized_t = segment_t / self.segment_duration
         
         # Sinusoidal velocity profile: smooth acceleration and deceleration
-        # s(t) = 0.5 * (1 - cos(π * t)) gives smooth 0 to 1 transition
+        # s(t) = 0.5 * (1 - cos(ПЂ * t)) gives smooth 0 to 1 transition
         smooth_t = 0.5 * (1 - math.cos(math.pi * normalized_t))
         
         # Define rectangle corners relative to starting position
@@ -528,10 +528,10 @@ def main():
 
     # Print comprehensive keymap information based on robot config
     print("\n" + "="*80)
-    print("🤖 XLeRobot 2Wheels Keyboard Control Keymap")
+    print("рџ¤– XLeRobot 2Wheels Keyboard Control Keymap")
     print("="*80)
     
-    print("\n📱 Base Control (Differential Drive):")
+    print("\nрџ“± Base Control (Differential Drive):")
     print(f"    {robot.teleop_keys['forward']}: Forward")
     print(f"    {robot.teleop_keys['backward']}: Backward") 
     print(f"    {robot.teleop_keys['rotate_left']}: Rotate Left")
@@ -539,53 +539,53 @@ def main():
     print(f"    {robot.teleop_keys['speed_up']}: Speed Up")
     print(f"    {robot.teleop_keys['speed_down']}: Speed Down")
     print(f"    {robot.teleop_keys['quit']}: Quit")
-    print("    🚀 Smooth Control: Linear acceleration when holding, linear deceleration when released")
+    print("    рџљЂ Smooth Control: Linear acceleration when holding, linear deceleration when released")
     
-    print("\n🦾 Left Arm Control:")
+    print("\nрџ¦ѕ Left Arm Control:")
     print("   Joint Control:")
-    print(f"    Q/E: Shoulder Pan +/- (shoulder_pan)")
+    print(f"    W/E: Shoulder Pan +/- (shoulder_pan)")
     print(f"    R/F: Wrist Roll +/- (wrist_roll)")
     print(f"    T/G: Gripper +/- (gripper)")
     print(f"    Z/X: Pitch +/- (pitch)")
     print("   Position Control:")
-    print(f"    W/S: X-axis +/- (x movement)")
+    print(f"    Q/S: X-axis +/- (x movement)")
     print(f"    A/D: Y-axis +/- (y movement)")
     print("   Special Functions:")
     print(f"    C: Reset to zero position")
     print(f"    Y: Execute rectangular trajectory")
     
-    print("\n🦾 Right Arm Control:")
+    print("\nрџ¦ѕ Right Arm Control:")
     print("   Joint Control:")
-    print(f"    7/9: Shoulder Pan +/- (shoulder_pan)")
+    print(f"    8/9: Shoulder Pan +/- (shoulder_pan)")
     print(f"    /*: Wrist Roll +/- (wrist_roll)")
     print(f"    +/-: Gripper +/- (gripper)")
     print(f"    1/3: Pitch +/- (pitch)")
     print("   Position Control:")
-    print(f"    8/2: X-axis +/- (x movement)")
+    print(f"    7/2: X-axis +/- (x movement)")
     print(f"    4/6: Y-axis +/- (y movement)")
     print("   Special Functions:")
     print(f"    0: Reset to zero position")
     print(f"    Y: Execute rectangular trajectory")
     
-    print("\n👁️ Head Control:")
+    print("\nрџ‘ЃпёЏ Head Control:")
     print(f"    </>: Head Motor 1 +/- (head_motor_1)")
     print(f"    ,/.: Head Motor 2 +/- (head_motor_2)")
     print(f"    ?: Head reset to zero position")
     
-    print(f"\n⚙️ Robot Configuration:")
+    print(f"\nвљ™пёЏ Robot Configuration:")
     print(f"   Wheel Radius: {robot.config.wheel_radius:.3f}m")
     print(f"   Wheelbase: {robot.config.wheelbase:.3f}m")
     print(f"   Speed Levels: {len(robot.speed_levels)} levels")
     for i, level in enumerate(robot.speed_levels):
-        print(f"      Level {i+1}: Linear {level['linear']:.1f}m/s, Angular {level['angular']:.0f}°/s")
+        print(f"      Level {i+1}: Linear {level['linear']:.1f}m/s, Angular {level['angular']:.0f}В°/s")
     
-    print(f"\n🚀 Smooth Control Parameters:")
+    print(f"\nрџљЂ Smooth Control Parameters:")
     print(f"   Acceleration Rate: {BASE_ACCELERATION_RATE:.1f} speed/second")
     print(f"   Deceleration Rate: {BASE_DECELERATION_RATE:.1f} speed/second")
     print(f"   Max Speed Multiplier: {BASE_MAX_SPEED:.1f}x")
     
     print("\n" + "="*80)
-    print("🎮 Control started! Use above keys to control robot")
+    print("рџЋ® Control started! Use above keys to control robot")
     print("="*80 + "\n")
 
     try:

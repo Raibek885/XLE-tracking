@@ -56,6 +56,7 @@ log/
 # Temporary files
 *.tmp
 *.temp
+*.save
 *.swp
 *.swo
 *~
@@ -97,6 +98,13 @@ lerna-debug.log*
 simulation/**/video_test_output*/
 simulation/**/test_output*.log
 software/**/test_output*.log
+
+# Local ML model/checkpoint artefacts
+*.pt
+*.pth
+*.onnx
+*.safetensors
+/mobileclip_blt.ts
 
 # Ignore web_control artefacts already covered locally
 web_control/client/node_modules/

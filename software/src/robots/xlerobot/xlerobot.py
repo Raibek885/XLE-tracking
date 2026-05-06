@@ -91,6 +91,30 @@ class XLerobot(Robot):
             calibration= calibration1,
         )
         if self.calibration.get("right_arm_shoulder_pan") is not None:
+            def wheel_calibration(name: str, motor_id: int, *legacy_names: str) -> MotorCalibration:
+                candidates = (name, *legacy_names)
+                for candidate in candidates:
+                    calibration = self.calibration.get(candidate)
+                    if calibration is not None and calibration.id == motor_id:
+                        return calibration
+                for candidate in candidates:
+                    calibration = self.calibration.get(candidate)
+                    if calibration is not None:
+                        return MotorCalibration(
+                            id=motor_id,
+                            drive_mode=calibration.drive_mode,
+                            homing_offset=calibration.homing_offset,
+                            range_min=calibration.range_min,
+                            range_max=calibration.range_max,
+                        )
+                return MotorCalibration(
+                    id=motor_id,
+                    drive_mode=0,
+                    homing_offset=0,
+                    range_min=0,
+                    range_max=4095,
+                )
+
             calibration2 = {
                 "right_arm_shoulder_pan": self.calibration.get("right_arm_shoulder_pan"),
                 "right_arm_shoulder_lift": self.calibration.get("right_arm_shoulder_lift"),
@@ -98,9 +122,9 @@ class XLerobot(Robot):
                 "right_arm_wrist_flex": self.calibration.get("right_arm_wrist_flex"),
                 "right_arm_wrist_roll": self.calibration.get("right_arm_wrist_roll"),
                 "right_arm_gripper": self.calibration.get("right_arm_gripper"),
-                "base_left_wheel": self.calibration.get("base_left_wheel"),
-                "base_back_wheel": self.calibration.get("base_back_wheel"),
-                "base_right_wheel": self.calibration.get("base_right_wheel"),
+                "base_left_wheel": wheel_calibration("base_left_wheel", 7),
+                "base_back_wheel": wheel_calibration("base_back_wheel", 9, "base_right_wheel"),
+                "base_right_wheel": wheel_calibration("base_right_wheel", 8, "base_back_wheel"),
             }
         else:
             calibration2 = self.calibration
@@ -114,13 +138,17 @@ class XLerobot(Robot):
                 "right_arm_wrist_flex": Motor(4, "sts3215", norm_mode_body),
                 "right_arm_wrist_roll": Motor(5, "sts3215", norm_mode_body),
                 "right_arm_gripper": Motor(6, "sts3215", MotorNormMode.RANGE_0_100),
-                # base
+                # base (physical ids: left=7, right=8, back=9)
                 "base_left_wheel": Motor(7, "sts3215", MotorNormMode.RANGE_M100_100),
-                "base_back_wheel": Motor(8, "sts3215", MotorNormMode.RANGE_M100_100),
-                "base_right_wheel": Motor(9, "sts3215", MotorNormMode.RANGE_M100_100),
+                "base_back_wheel": Motor(9, "sts3215", MotorNormMode.RANGE_M100_100),
+                "base_right_wheel": Motor(8, "sts3215", MotorNormMode.RANGE_M100_100),
             },
             calibration=calibration2,
         )
+        self.calibration = {
+            **{k: v for k, v in self.bus1.calibration.items() if k in self.bus1.motors},
+            **{k: v for k, v in self.bus2.calibration.items() if k in self.bus2.motors},
+        }
         self.left_arm_motors = [motor for motor in self.bus1.motors if motor.startswith("left_arm")]
         self.right_arm_motors = [motor for motor in self.bus2.motors if motor.startswith("right_arm")]
         self.head_motors = [motor for motor in self.bus1.motors if motor.startswith("head")]
@@ -188,14 +216,17 @@ class XLerobot(Robot):
             if user_input.strip().lower() != "c":
                 logger.info("Attempting to restore calibration from file...")
                 try:
+                    bus1_calibration = {k: v for k, v in self.calibration.items() if k in self.bus1.motors}
+                    bus2_calibration = {k: v for k, v in self.calibration.items() if k in self.bus2.motors}
+
                     # Load calibration data into bus memory
-                    self.bus1.calibration = {k: v for k, v in self.calibration.items() if k in self.bus1.motors}
-                    self.bus2.calibration = {k: v for k, v in self.calibration.items() if k in self.bus2.motors}
+                    self.bus1.calibration = bus1_calibration
+                    self.bus2.calibration = bus2_calibration
                     logger.info("Calibration data loaded into bus memory successfully!")
                     
                     # Write calibration data to motors
-                    self.bus1.write_calibration({k: v for k, v in self.calibration.items() if k in self.bus1.motors})
-                    self.bus2.write_calibration({k: v for k, v in self.calibration.items() if k in self.bus2.motors})
+                    self.bus1.write_calibration(bus1_calibration)
+                    self.bus2.write_calibration(bus2_calibration)
                     logger.info("Calibration restored successfully from file!")
                     
                 except Exception as e:
@@ -632,16 +663,40 @@ class XLerobot(Robot):
         }
 
     def stop_base(self):
+        try:
+            self.bus2.port_handler.clearPort()
+            self.bus2.port_handler.is_using = False
+        except Exception:
+            pass
+
         self.bus2.sync_write("Goal_Velocity", dict.fromkeys(self.base_motors, 0), num_retry=5)
         logger.info("Base motors stopped")
+
 
     def disconnect(self):
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
-        self.stop_base()
+        try:
+            self.stop_base()
+        except Exception as e:
+            logger.warning(f"Failed to stop base before disconnect: {e}")
+
+        try:
+            self.bus1.port_handler.clearPort()
+            self.bus1.port_handler.is_using = False
+        except Exception:
+            pass
+
+        try:
+            self.bus2.port_handler.clearPort()
+            self.bus2.port_handler.is_using = False
+        except Exception:
+            pass
+
         self.bus1.disconnect(self.config.disable_torque_on_disconnect)
         self.bus2.disconnect(self.config.disable_torque_on_disconnect)
+
         for cam in self.cameras.values():
             cam.disconnect()
 

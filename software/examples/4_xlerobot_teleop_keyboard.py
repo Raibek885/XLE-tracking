@@ -1,3 +1,4 @@
+
 # To Run on the host
 '''python
 PYTHONPATH=src python -m lerobot.robots.xlerobot.xlerobot_host --robot.id=my_xlerobot
@@ -8,6 +9,13 @@ PYTHONPATH=src python -m lerobot.robots.xlerobot.xlerobot_host --robot.id=my_xle
 PYTHONPATH=src python -m examples.xlerobot.teleoperate_Keyboard
 '''
 
+import os
+import sys
+import select
+import termios
+import tty
+import threading
+import _thread
 import time
 import numpy as np
 import math
@@ -16,7 +24,63 @@ from lerobot.robots.xlerobot import XLerobotConfig, XLerobot
 # from lerobot.robots.xlerobot import XLerobotClient, XLerobotClientConfig
 # from lerobot.utils.robot_utils import busy_wait
 from lerobot.utils.robot_utils import precise_sleep
-from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
+
+
+class StdinKeyboard:
+    """Stdin-based keyboard reader for SSH/headless environments."""
+
+    def __init__(self):
+        self._pressed = {}
+        self._lock = threading.Lock()
+        self._running = False
+        self._thread = None
+        self._old_settings = None
+
+    @property
+    def is_connected(self):
+        return self._running
+
+    def connect(self):
+        self._old_settings = termios.tcgetattr(sys.stdin)
+        tty.setraw(sys.stdin.fileno())
+        self._running = True
+        self._thread = threading.Thread(target=self._read_loop, daemon=True)
+        self._thread.start()
+        print("Keyboard ready (SSH/stdin mode). Press Ctrl+C to stop.")
+
+    def _read_loop(self):
+        while self._running:
+            ready, _, _ = select.select([sys.stdin], [], [], 0.05)
+            if ready:
+                ch = sys.stdin.read(1)
+                if ch == '\x03':  # Ctrl+C
+                    _thread.interrupt_main()
+                    return
+                if ch == '\x1b':  # skip escape sequences
+                    continue
+                with self._lock:
+                    self._pressed[ch] = True
+
+    def get_action(self):
+        with self._lock:
+            result = dict.fromkeys(self._pressed.keys(), None)
+            self._pressed.clear()
+        return result
+
+    def disconnect(self):
+        self._running = False
+        if self._old_settings is not None:
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self._old_settings)
+            self._old_settings = None
+
+
+
+RERUN_ENABLED = os.getenv("RERUN_DISABLE", "0") != "1"
+if RERUN_ENABLED:
+    from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
+else:
+    def init_rerun(*args, **kwargs): pass
+    def log_rerun_data(*args, **kwargs): pass
 from lerobot.model.SO101Robot import SO101Kinematics
 # from lerobot.teleoperators.keyboard.teleop_keyboard import KeyboardTeleop, KeyboardTeleopConfig
 
@@ -26,12 +90,12 @@ from lerobot.teleoperators.keyboard.configuration_keyboard import KeyboardTeleop
 
 # Keymaps (semantic action: key)
 LEFT_KEYMAP = {
-    'shoulder_pan+': 'q', 'shoulder_pan-': 'e',
-    'wrist_roll+': 'r', 'wrist_roll-': 'f',
-    'gripper+': 't', 'gripper-': 'g',
-    'x+': 'w', 'x-': 's', 'y+': 'a', 'y-': 'd',
-    'pitch+': 'z', 'pitch-': 'x',
-    'reset': 'c',
+    'shoulder_pan+': '9', 'shoulder_pan-': '7',
+    'wrist_roll+': '/', 'wrist_roll-': '*',
+    'gripper+': '+', 'gripper-': '-',
+    'x+': '8', 'x-': '2', 'y+': '4', 'y-': '6',
+    'pitch+': '1', 'pitch-': '3',
+    'reset': '0',
     # For head motors
     "head_motor_1+": "<", "head_motor_1-": ">",
     "head_motor_2+": ",", "head_motor_2-": ".",
@@ -39,13 +103,13 @@ LEFT_KEYMAP = {
     'triangle': 'y',  # Rectangle trajectory key
 }
 RIGHT_KEYMAP = {
-    'shoulder_pan+': '7', 'shoulder_pan-': '9',
-    'wrist_roll+': '/', 'wrist_roll-': '*',
-    'gripper+': '+', 'gripper-': '-',
-    'x+': '8', 'x-': '2', 'y+': '4', 'y-': '6',
-    'pitch+': '1', 'pitch-': '3',
-    'reset': '0',
-
+    'shoulder_pan+': 'e', 'shoulder_pan-': 'q',
+    'wrist_roll+': 'r', 'wrist_roll-': 'f',
+    'gripper+': 't', 'gripper-': 'g',
+    'x+': 'w', 'x-': 's', 'y+': 'a', 'y-': 'd',
+    'pitch+': 'z', 'pitch-': 'x',
+    'reset': 'c',
+    
     'triangle': 'Y',  # Rectangle trajectory key
 }
 
@@ -111,7 +175,7 @@ class RectangularTrajectory:
         normalized_t = segment_t / self.segment_duration
         
         # Sinusoidal velocity profile: smooth acceleration and deceleration
-        # s(t) = 0.5 * (1 - cos(π * t)) gives smooth 0 to 1 transition
+        # s(t) = 0.5 * (1 - cos(ПЂ * t)) gives smooth 0 to 1 transition
         smooth_t = 0.5 * (1 - math.cos(math.pi * normalized_t))
         
         # Define rectangle corners relative to starting position
@@ -138,7 +202,7 @@ class RectangularTrajectory:
 class SimpleHeadControl:
     def __init__(self, initial_obs, kp=0.81):
         self.kp = kp
-        self.degree_step = 1
+        self.degree_step = 2
         # Initialize head motor positions
         self.target_positions = {
             "head_motor_1": initial_obs.get("head_motor_1.pos", 0.0),
@@ -195,8 +259,8 @@ class SimpleTeleopArm:
         self.current_y = 0.1131
         self.pitch = 0.0
         # Set the degree step and xy step
-        self.degree_step = 3
-        self.xy_step = 0.0081
+        self.degree_step = 6
+        self.xy_step = 0.016
         # Set target positions to zero for P control
         self.target_positions = {
             "shoulder_pan": 0.0,
@@ -386,37 +450,29 @@ class SimpleTeleopArm:
     
 
 def main():
-    # Teleop parameters
-    FPS = 50
-    # ip = "192.168.1.123"  # This is for zmq connection
-    ip = "localhost"  # This is for local/wired connection
-    robot_name = "my_xlerobot_pc"
-
-    # For zmq connection
-    # robot_config = XLerobotClientConfig(remote_ip=ip, id=robot_name)
-    # robot = XLerobotClient(robot_config)    
-
-    # For local/wired connection
-    robot_config = XLerobotConfig()
+    FPS = 20
+    robot_config = XLerobotConfig(
+    port1="/dev/arm_left",
+    port2="/dev/arm_right",
+)
     robot = XLerobot(robot_config)
-    
+    keyboard = None
+
     try:
         robot.connect()
-        print(f"[MAIN] Successfully connected to robot")
+        print("[MAIN] Successfully connected to robot")
     except Exception as e:
         print(f"[MAIN] Failed to connect to robot: {e}")
         print(robot_config)
         print(robot)
         return
-        
+
     init_rerun(session_name="xlerobot_teleop_v2")
 
-    #Init the keyboard instance
-    keyboard_config = KeyboardTeleopConfig()
-    keyboard = KeyboardTeleop(keyboard_config)
+    keyboard = StdinKeyboard()
     keyboard.connect()
 
-    # Init the arm and head instances
+
     obs = robot.get_observation()
     kin_left = SO101Kinematics()
     kin_right = SO101Kinematics()
@@ -424,52 +480,47 @@ def main():
     right_arm = SimpleTeleopArm(kin_right, RIGHT_JOINT_MAP, obs, prefix="right")
     head_control = SimpleHeadControl(obs)
 
-    # Move both arms and head to zero position at start
     left_arm.move_to_zero_position(robot)
     right_arm.move_to_zero_position(robot)
 
     try:
         while True:
+            loop_start = time.perf_counter()
+
             pressed_keys = set(keyboard.get_action().keys())
             left_key_state = {action: (key in pressed_keys) for action, key in LEFT_KEYMAP.items()}
             right_key_state = {action: (key in pressed_keys) for action, key in RIGHT_KEYMAP.items()}
 
-            # Handle rectangular trajectory for left arm (y key)
-            if left_key_state.get('triangle'):
+            if left_key_state.get("triangle"):
                 print("[MAIN] Left arm rectangular trajectory triggered!")
                 left_arm.execute_rectangular_trajectory(robot, fps=FPS)
                 continue
 
-            # Handle rectangular trajectory for right arm (Y key)  
-            if right_key_state.get('triangle'):
+            if right_key_state.get("triangle"):
                 print("[MAIN] Right arm rectangular trajectory triggered!")
                 right_arm.execute_rectangular_trajectory(robot, fps=FPS)
                 continue
 
-            # Handle reset for left arm
-            if left_key_state.get('reset'):
+            if left_key_state.get("reset"):
                 left_arm.move_to_zero_position(robot)
-                continue  
+                continue
 
-            # Handle reset for right arm
-            if right_key_state.get('reset'):
+            if right_key_state.get("reset"):
                 right_arm.move_to_zero_position(robot)
                 continue
 
-            # Handle reset for head motors with '?'
-            if '?' in pressed_keys:
+            if "?" in pressed_keys:
                 head_control.move_to_zero_position(robot)
                 continue
 
             left_arm.handle_keys(left_key_state)
             right_arm.handle_keys(right_key_state)
-            head_control.handle_keys(left_key_state)  # Head controlled by left arm keymap
+            head_control.handle_keys(left_key_state)
 
             left_action = left_arm.p_control_action(robot)
             right_action = right_arm.p_control_action(robot)
             head_action = head_control.p_control_action(robot)
 
-            # Base action
             keyboard_keys = np.array(list(pressed_keys))
             base_action = robot._from_keyboard_to_base_action(keyboard_keys) or {}
 
@@ -477,13 +528,22 @@ def main():
             robot.send_action(action)
 
             obs = robot.get_observation()
-            # print(f"[MAIN] Observation: {obs}")
             log_rerun_data(obs, action)
-            # busy_wait(1.0 / FPS)
+
+            remaining = (1.0 / FPS) - (time.perf_counter() - loop_start)
+            if remaining > 0:
+                precise_sleep(remaining)
+
     finally:
-        robot.disconnect()
-        keyboard.disconnect()
+        try:
+            robot.disconnect()
+        except Exception as e:
+            print(f"[MAIN] Robot disconnect warning: {e}")
+        finally:
+            if keyboard is not None:
+                keyboard.disconnect()
         print("Teleoperation ended.")
+
 
 if __name__ == "__main__":
     main()

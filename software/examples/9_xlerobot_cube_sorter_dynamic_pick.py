@@ -174,6 +174,38 @@ def bilinear_pose(points, pose_key, u, v):
     return pose
 
 
+def pixel_grid_polygon(grid):
+    points = grid["points"]
+    return np.array(
+        [
+            points["top_left"]["pixel"],
+            points["top_right"]["pixel"],
+            points["bottom_right"]["pixel"],
+            points["bottom_left"]["pixel"],
+        ],
+        dtype=np.float32,
+    )
+
+
+def inside_pixel_grid(grid, center, margin_px):
+    polygon = pixel_grid_polygon(grid)
+    return cv2.pointPolygonTest(polygon, (float(center[0]), float(center[1])), True) >= -margin_px
+
+
+def inverse_distance_pose(points, pose_key, center, power=2.0):
+    weights = []
+    for name in GRID_ORDER:
+        px, py = points[name]["pixel"]
+        distance = max(float(np.hypot(center[0] - px, center[1] - py)), 1.0)
+        weights.append((name, 1.0 / (distance**power)))
+
+    total = sum(weight for _name, weight in weights)
+    pose = {}
+    for key in RIGHT_KEYS:
+        pose[key] = sum(points[name][pose_key][key] * weight for name, weight in weights) / total
+    return pose
+
+
 def pose_with_gripper(pose, gripper_pose):
     result = dict(pose)
     result["right_arm_gripper.pos"] = float(gripper_pose["right_arm_gripper.pos"])
@@ -270,12 +302,19 @@ def draw_scene(frame, detections, grid, target, uv, stable_count, stable_frames)
     return output
 
 
-def run_dynamic_pick_sort(robot, poses, grid, uv, target_color):
+def run_dynamic_pick_sort(robot, poses, grid, target, uv, pose_method):
     open_gripper = poses["gripper_open"]
     closed_gripper = poses["gripper_closed"]
+    target_color = target["color"]
+    target_center = target["center"]
     drop_pose_name = f"drop_{target_color}"
-    pre_pose = bilinear_pose(grid["points"], "pre_pose", uv[0], uv[1])
-    grasp_pose = bilinear_pose(grid["points"], "grasp_pose", uv[0], uv[1])
+
+    if pose_method == "bilinear":
+        pre_pose = bilinear_pose(grid["points"], "pre_pose", uv[0], uv[1])
+        grasp_pose = bilinear_pose(grid["points"], "grasp_pose", uv[0], uv[1])
+    else:
+        pre_pose = inverse_distance_pose(grid["points"], "pre_pose", target_center)
+        grasp_pose = inverse_distance_pose(grid["points"], "grasp_pose", target_center)
 
     sequence = [
         ("home", pose_with_gripper(poses["home"], open_gripper), 2.0),
@@ -289,7 +328,16 @@ def run_dynamic_pick_sort(robot, poses, grid, uv, target_color):
         ("home", poses["home"], 3.0),
     ]
 
-    print(f"[SORT] {target_color} at uv=({uv[0]:.3f}, {uv[1]:.3f}) -> {drop_pose_name}")
+    print(
+        f"[SORT] {target_color} center={target_center} "
+        f"uv=({uv[0]:.3f}, {uv[1]:.3f}) method={pose_method} -> {drop_pose_name}"
+    )
+    print(
+        "[SORT] pre_pose shoulder_pan/lift/elbow="
+        f"{pre_pose['right_arm_shoulder_pan.pos']:.2f}/"
+        f"{pre_pose['right_arm_shoulder_lift.pos']:.2f}/"
+        f"{pre_pose['right_arm_elbow_flex.pos']:.2f}"
+    )
     for name, pose, duration in sequence:
         print(f"[SORT] Moving to {name}")
         move_to_pose(robot, pose, duration=duration)
@@ -305,6 +353,8 @@ def main():
     parser.add_argument("--stable-frames", type=int, default=8)
     parser.add_argument("--min-area", type=int, default=500)
     parser.add_argument("--uv-margin", type=float, default=0.08)
+    parser.add_argument("--pixel-margin", type=float, default=20.0)
+    parser.add_argument("--pose-method", choices=["idw", "bilinear"], default="idw")
     args = parser.parse_args()
 
     with open(args.poses, "r", encoding="utf-8") as f:
@@ -362,15 +412,21 @@ def main():
                 if not target or stable_count < args.stable_frames or uv is None:
                     print("[PC] Target is not stable yet.")
                     continue
-                if not inside_uv_with_margin(uv, args.uv_margin):
+                if args.pose_method == "bilinear" and not inside_uv_with_margin(uv, args.uv_margin):
                     print(
                         f"[PC] Target outside calibrated grid: "
                         f"uv=({uv[0]:.3f}, {uv[1]:.3f}), margin={args.uv_margin:.2f}"
                     )
                     continue
+                if args.pose_method == "idw" and not inside_pixel_grid(grid, target["center"], args.pixel_margin):
+                    print(
+                        f"[PC] Target outside calibrated pixel grid: "
+                        f"center={target['center']}, margin_px={args.pixel_margin:.1f}"
+                    )
+                    continue
 
                 cv2.destroyWindow("XLeRobot dynamic cube sorter")
-                run_dynamic_pick_sort(robot, poses, grid, clamp_uv(uv), target["color"])
+                run_dynamic_pick_sort(robot, poses, grid, target, clamp_uv(uv), args.pose_method)
                 break
 
     finally:

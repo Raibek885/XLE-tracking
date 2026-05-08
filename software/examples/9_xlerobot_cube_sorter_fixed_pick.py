@@ -159,7 +159,7 @@ def run_fixed_pick_sort(robot, poses, target_color):
         ("lift_after_grasp", pose_with_gripper(poses["lift_after_grasp"], closed_gripper), 2.0),
         (drop_pose_name, pose_with_gripper(poses[drop_pose_name], closed_gripper), 3.0),
         ("open_gripper", pose_with_gripper(poses[drop_pose_name], open_gripper), 1.0),
-        ("home", pose_with_gripper(poses["home"], open_gripper), 3.0),
+        ("home", poses["home"], 3.0),
     ]
 
     print(f"[SORT] Detected {target_color}. Running fixed pick -> {drop_pose_name}")

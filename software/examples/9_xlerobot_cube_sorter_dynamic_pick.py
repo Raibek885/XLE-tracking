@@ -206,6 +206,26 @@ def inverse_distance_pose(points, pose_key, center, power=2.0):
     return pose
 
 
+def parse_pose_offsets(raw_offsets):
+    offsets = {}
+    for raw in raw_offsets:
+        if "=" not in raw:
+            raise ValueError(f"Offset must be JOINT=VALUE, got: {raw}")
+        joint, value = raw.split("=", 1)
+        joint = joint.strip()
+        if joint not in RIGHT_KEYS:
+            raise KeyError(f"Unknown right-arm joint for offset: {joint}")
+        offsets[joint] = offsets.get(joint, 0.0) + float(value)
+    return offsets
+
+
+def apply_pose_offsets(pose, offsets):
+    result = dict(pose)
+    for joint, offset in offsets.items():
+        result[joint] += offset
+    return result
+
+
 def pose_with_gripper(pose, gripper_pose):
     result = dict(pose)
     result["right_arm_gripper.pos"] = float(gripper_pose["right_arm_gripper.pos"])
@@ -302,7 +322,7 @@ def draw_scene(frame, detections, grid, target, uv, stable_count, stable_frames)
     return output
 
 
-def run_dynamic_pick_sort(robot, poses, grid, target, uv, pose_method):
+def run_dynamic_pick_sort(robot, poses, grid, target, uv, pose_method, pre_offsets, grasp_offsets):
     open_gripper = poses["gripper_open"]
     closed_gripper = poses["gripper_closed"]
     target_color = target["color"]
@@ -315,6 +335,8 @@ def run_dynamic_pick_sort(robot, poses, grid, target, uv, pose_method):
     else:
         pre_pose = inverse_distance_pose(grid["points"], "pre_pose", target_center)
         grasp_pose = inverse_distance_pose(grid["points"], "grasp_pose", target_center)
+    pre_pose = apply_pose_offsets(pre_pose, pre_offsets)
+    grasp_pose = apply_pose_offsets(grasp_pose, grasp_offsets)
 
     sequence = [
         ("home", pose_with_gripper(poses["home"], open_gripper), 2.0),
@@ -338,6 +360,13 @@ def run_dynamic_pick_sort(robot, poses, grid, target, uv, pose_method):
         f"{pre_pose['right_arm_shoulder_lift.pos']:.2f}/"
         f"{pre_pose['right_arm_elbow_flex.pos']:.2f}"
     )
+    print(
+        "[SORT] grasp_pose shoulder_pan/lift/elbow/wrist_flex="
+        f"{grasp_pose['right_arm_shoulder_pan.pos']:.2f}/"
+        f"{grasp_pose['right_arm_shoulder_lift.pos']:.2f}/"
+        f"{grasp_pose['right_arm_elbow_flex.pos']:.2f}/"
+        f"{grasp_pose['right_arm_wrist_flex.pos']:.2f}"
+    )
     for name, pose, duration in sequence:
         print(f"[SORT] Moving to {name}")
         move_to_pose(robot, pose, duration=duration)
@@ -355,11 +384,29 @@ def main():
     parser.add_argument("--uv-margin", type=float, default=0.08)
     parser.add_argument("--pixel-margin", type=float, default=20.0)
     parser.add_argument("--pose-method", choices=["idw", "bilinear"], default="idw")
+    parser.add_argument(
+        "--pre-offset",
+        action="append",
+        default=[],
+        help="Repeatable offset for dynamic pre-grasp pose, e.g. right_arm_shoulder_lift.pos=1.5",
+    )
+    parser.add_argument(
+        "--grasp-offset",
+        action="append",
+        default=[],
+        help="Repeatable offset for dynamic grasp pose, e.g. right_arm_elbow_flex.pos=-1.0",
+    )
     args = parser.parse_args()
 
     with open(args.poses, "r", encoding="utf-8") as f:
         poses = json.load(f)
     grid, homography = load_pick_grid(args.grid)
+    pre_offsets = parse_pose_offsets(args.pre_offset)
+    grasp_offsets = parse_pose_offsets(args.grasp_offset)
+    if pre_offsets:
+        print(f"[CONFIG] pre_offsets={pre_offsets}")
+    if grasp_offsets:
+        print(f"[CONFIG] grasp_offsets={grasp_offsets}")
 
     robot = XLerobotClient(
         XLerobotClientConfig(
@@ -426,7 +473,16 @@ def main():
                     continue
 
                 cv2.destroyWindow("XLeRobot dynamic cube sorter")
-                run_dynamic_pick_sort(robot, poses, grid, target, clamp_uv(uv), args.pose_method)
+                run_dynamic_pick_sort(
+                    robot,
+                    poses,
+                    grid,
+                    target,
+                    clamp_uv(uv),
+                    args.pose_method,
+                    pre_offsets,
+                    grasp_offsets,
+                )
                 break
 
     finally:

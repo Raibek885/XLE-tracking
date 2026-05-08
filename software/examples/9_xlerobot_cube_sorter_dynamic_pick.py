@@ -99,10 +99,42 @@ def load_pick_grid(path):
             if key not in points[name]:
                 raise KeyError(f"Missing {name}.{key} in {path}")
 
-    src = np.float32([points[name]["pixel"] for name in GRID_ORDER])
+    grid["points"] = normalize_pick_grid_points(points)
+    src = np.float32([grid["points"][name]["pixel"] for name in GRID_ORDER])
     dst = np.float32([[0, 0], [1, 0], [0, 1], [1, 1]])
     homography = cv2.getPerspectiveTransform(src, dst)
     return grid, homography
+
+
+def normalize_pick_grid_points(points):
+    labeled_points = []
+    for label, point in points.items():
+        px, py = point["pixel"]
+        labeled_points.append((label, float(px), float(py), point))
+
+    top_two = sorted(labeled_points, key=lambda item: item[2])[:2]
+    bottom_two = sorted(labeled_points, key=lambda item: item[2])[2:]
+    top_left, top_right = sorted(top_two, key=lambda item: item[1])
+    bottom_left, bottom_right = sorted(bottom_two, key=lambda item: item[1])
+
+    mapping = {
+        "top_left": top_left,
+        "top_right": top_right,
+        "bottom_left": bottom_left,
+        "bottom_right": bottom_right,
+    }
+    normalized = {}
+    source_labels = {}
+    for canonical_name, (source_label, _px, _py, point) in mapping.items():
+        normalized[canonical_name] = dict(point)
+        normalized[canonical_name]["source_label"] = source_label
+        source_labels[canonical_name] = source_label
+
+    if any(canonical != source for canonical, source in source_labels.items()):
+        print(f"[GRID] Corner labels were reordered from pixels: {source_labels}")
+    else:
+        print("[GRID] Corner labels match pixel order.")
+    return normalized
 
 
 def pixel_to_uv(homography, center):
@@ -113,6 +145,14 @@ def pixel_to_uv(homography, center):
 
 def clamp01(value):
     return max(0.0, min(1.0, value))
+
+
+def inside_uv_with_margin(uv, margin):
+    return -margin <= uv[0] <= 1.0 + margin and -margin <= uv[1] <= 1.0 + margin
+
+
+def clamp_uv(uv):
+    return clamp01(uv[0]), clamp01(uv[1])
 
 
 def bilinear_pose(points, pose_key, u, v):
@@ -264,6 +304,7 @@ def main():
     parser.add_argument("--camera", default="head_cam")
     parser.add_argument("--stable-frames", type=int, default=8)
     parser.add_argument("--min-area", type=int, default=500)
+    parser.add_argument("--uv-margin", type=float, default=0.08)
     args = parser.parse_args()
 
     with open(args.poses, "r", encoding="utf-8") as f:
@@ -321,12 +362,15 @@ def main():
                 if not target or stable_count < args.stable_frames or uv is None:
                     print("[PC] Target is not stable yet.")
                     continue
-                if not (0.0 <= uv[0] <= 1.0 and 0.0 <= uv[1] <= 1.0):
-                    print(f"[PC] Target outside calibrated grid: uv=({uv[0]:.3f}, {uv[1]:.3f})")
+                if not inside_uv_with_margin(uv, args.uv_margin):
+                    print(
+                        f"[PC] Target outside calibrated grid: "
+                        f"uv=({uv[0]:.3f}, {uv[1]:.3f}), margin={args.uv_margin:.2f}"
+                    )
                     continue
 
                 cv2.destroyWindow("XLeRobot dynamic cube sorter")
-                run_dynamic_pick_sort(robot, poses, grid, uv, target["color"])
+                run_dynamic_pick_sort(robot, poses, grid, clamp_uv(uv), target["color"])
                 break
 
     finally:

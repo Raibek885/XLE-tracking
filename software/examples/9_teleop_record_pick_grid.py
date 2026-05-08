@@ -156,7 +156,7 @@ def print_help(point_name, description, stage_name):
     print("  t/g: gripper -/+")
     print("  p: save current stage")
     print("  h: print help")
-    print("  q or esc in terminal/window: quit")
+    print("  b or esc in terminal/window: quit")
     print("--------------------------\n")
 
 
@@ -232,7 +232,7 @@ def main():
 
                     window_key = cv2.waitKey(1) & 0xFF
                     key = read_key()
-                    if window_key in (ord("q"), 27) or key in ("q", "\x1b", "\x03"):
+                    if window_key in (ord("b"), 27) or key in ("b", "\x1b", "\x03"):
                         raise KeyboardInterrupt
 
                     if key == "h":

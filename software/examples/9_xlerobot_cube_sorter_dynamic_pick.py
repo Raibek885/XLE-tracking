@@ -20,6 +20,7 @@ RIGHT_KEYS = [
     "right_arm_wrist_roll.pos",
     "right_arm_gripper.pos",
 ]
+SHOULDER_PAN_KEY = "right_arm_shoulder_pan.pos"
 
 GRID_ORDER = ["top_left", "top_right", "bottom_left", "bottom_right"]
 
@@ -226,6 +227,11 @@ def apply_pose_offsets(pose, offsets):
     return result
 
 
+def add_offset(offsets, joint, value):
+    if value:
+        offsets[joint] = offsets.get(joint, 0.0) + value
+
+
 def pose_with_gripper(pose, gripper_pose):
     result = dict(pose)
     result["right_arm_gripper.pos"] = float(gripper_pose["right_arm_gripper.pos"])
@@ -396,6 +402,24 @@ def main():
         default=[],
         help="Repeatable offset for dynamic grasp pose, e.g. right_arm_elbow_flex.pos=-1.0",
     )
+    parser.add_argument(
+        "--shoulder-pan-offset",
+        type=float,
+        default=0.0,
+        help="Shortcut offset for q/e base shoulder pan. Applied to both pre-grasp and grasp poses.",
+    )
+    parser.add_argument(
+        "--pre-shoulder-pan-offset",
+        type=float,
+        default=0.0,
+        help="Extra q/e shoulder pan offset for pre-grasp only.",
+    )
+    parser.add_argument(
+        "--grasp-shoulder-pan-offset",
+        type=float,
+        default=0.0,
+        help="Extra q/e shoulder pan offset for grasp only.",
+    )
     args = parser.parse_args()
 
     with open(args.poses, "r", encoding="utf-8") as f:
@@ -403,6 +427,10 @@ def main():
     grid, homography = load_pick_grid(args.grid)
     pre_offsets = parse_pose_offsets(args.pre_offset)
     grasp_offsets = parse_pose_offsets(args.grasp_offset)
+    add_offset(pre_offsets, SHOULDER_PAN_KEY, args.shoulder_pan_offset)
+    add_offset(grasp_offsets, SHOULDER_PAN_KEY, args.shoulder_pan_offset)
+    add_offset(pre_offsets, SHOULDER_PAN_KEY, args.pre_shoulder_pan_offset)
+    add_offset(grasp_offsets, SHOULDER_PAN_KEY, args.grasp_shoulder_pan_offset)
     if pre_offsets:
         print(f"[CONFIG] pre_offsets={pre_offsets}")
     if grasp_offsets:

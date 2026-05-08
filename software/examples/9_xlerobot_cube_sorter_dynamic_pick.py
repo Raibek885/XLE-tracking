@@ -22,7 +22,7 @@ RIGHT_KEYS = [
 ]
 SHOULDER_PAN_KEY = "right_arm_shoulder_pan.pos"
 
-GRID_ORDER = ["top_left", "top_right", "bottom_left", "bottom_right"]
+CORNER_ORDER = ["top_left", "top_right", "bottom_left", "bottom_right"]
 
 HSV_RANGES = {
     "red": [
@@ -91,17 +91,17 @@ def load_pick_grid(path):
         grid = json.load(f)
 
     points = grid.get("points", {})
-    missing = [name for name in GRID_ORDER if name not in points]
+    missing = [name for name in CORNER_ORDER if name not in points]
     if missing:
         raise KeyError(f"Missing pick-grid points in {path}: {missing}")
 
-    for name in GRID_ORDER:
+    for name in points:
         for key in ("pixel", "pre_pose", "grasp_pose"):
             if key not in points[name]:
                 raise KeyError(f"Missing {name}.{key} in {path}")
 
     grid["points"] = normalize_pick_grid_points(points)
-    src = np.float32([grid["points"][name]["pixel"] for name in GRID_ORDER])
+    src = np.float32([grid["points"][name]["pixel"] for name in CORNER_ORDER])
     dst = np.float32([[0, 0], [1, 0], [0, 1], [1, 1]])
     homography = cv2.getPerspectiveTransform(src, dst)
     return grid, homography
@@ -113,10 +113,10 @@ def normalize_pick_grid_points(points):
         px, py = point["pixel"]
         labeled_points.append((label, float(px), float(py), point))
 
-    top_two = sorted(labeled_points, key=lambda item: item[2])[:2]
-    bottom_two = sorted(labeled_points, key=lambda item: item[2])[2:]
-    top_left, top_right = sorted(top_two, key=lambda item: item[1])
-    bottom_left, bottom_right = sorted(bottom_two, key=lambda item: item[1])
+    top_left = min(labeled_points, key=lambda item: item[1] + item[2])
+    top_right = max(labeled_points, key=lambda item: item[1] - item[2])
+    bottom_left = min(labeled_points, key=lambda item: item[1] - item[2])
+    bottom_right = max(labeled_points, key=lambda item: item[1] + item[2])
 
     mapping = {
         "top_left": top_left,
@@ -126,15 +126,24 @@ def normalize_pick_grid_points(points):
     }
     normalized = {}
     source_labels = {}
+    used_source_labels = set()
     for canonical_name, (source_label, _px, _py, point) in mapping.items():
         normalized[canonical_name] = dict(point)
         normalized[canonical_name]["source_label"] = source_label
         source_labels[canonical_name] = source_label
+        used_source_labels.add(source_label)
+
+    for source_label, _px, _py, point in labeled_points:
+        if source_label in used_source_labels or source_label in CORNER_ORDER:
+            continue
+        normalized[source_label] = dict(point)
+        normalized[source_label]["source_label"] = source_label
 
     if any(canonical != source for canonical, source in source_labels.items()):
         print(f"[GRID] Corner labels were reordered from pixels: {source_labels}")
     else:
         print("[GRID] Corner labels match pixel order.")
+    print(f"[GRID] Loaded {len(normalized)} calibration points for local interpolation.")
     return normalized
 
 
@@ -193,17 +202,20 @@ def inside_pixel_grid(grid, center, margin_px):
     return cv2.pointPolygonTest(polygon, (float(center[0]), float(center[1])), True) >= -margin_px
 
 
-def inverse_distance_pose(points, pose_key, center, power=2.0):
+def inverse_distance_pose(points, pose_key, center, power=2.0, neighbors=4):
     weights = []
-    for name in GRID_ORDER:
-        px, py = points[name]["pixel"]
+    for name, point in points.items():
+        if pose_key not in point:
+            continue
+        px, py = point["pixel"]
         distance = max(float(np.hypot(center[0] - px, center[1] - py)), 1.0)
-        weights.append((name, 1.0 / (distance**power)))
+        weights.append((name, distance, 1.0 / (distance**power)))
+    weights = sorted(weights, key=lambda item: item[1])[: max(1, neighbors)]
 
-    total = sum(weight for _name, weight in weights)
+    total = sum(weight for _name, _distance, weight in weights)
     pose = {}
     for key in RIGHT_KEYS:
-        pose[key] = sum(points[name][pose_key][key] * weight for name, weight in weights) / total
+        pose[key] = sum(points[name][pose_key][key] * weight for name, _distance, weight in weights) / total
     return pose
 
 
@@ -298,10 +310,11 @@ def draw_scene(frame, detections, grid, target, uv, stable_count, stable_frames)
     )
     cv2.polylines(output, [polygon], isClosed=True, color=(255, 255, 255), thickness=2)
 
-    for name in GRID_ORDER:
-        px, py = points[name]["pixel"]
-        cv2.circle(output, (px, py), 6, (255, 255, 255), 2)
-        cv2.putText(output, name, (px + 6, py - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+    for name, point in points.items():
+        px, py = point["pixel"]
+        color = (255, 255, 255) if name in CORNER_ORDER else (0, 255, 255)
+        cv2.circle(output, (px, py), 6, color, 2)
+        cv2.putText(output, name, (px + 6, py - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
 
     for det in detections:
         color_name = det["color"]
@@ -328,7 +341,18 @@ def draw_scene(frame, detections, grid, target, uv, stable_count, stable_frames)
     return output
 
 
-def run_dynamic_pick_sort(robot, poses, grid, target, uv, pose_method, pre_offsets, grasp_offsets):
+def run_dynamic_pick_sort(
+    robot,
+    poses,
+    grid,
+    target,
+    uv,
+    pose_method,
+    pre_offsets,
+    grasp_offsets,
+    idw_power,
+    idw_neighbors,
+):
     open_gripper = poses["gripper_open"]
     closed_gripper = poses["gripper_closed"]
     target_color = target["color"]
@@ -339,8 +363,10 @@ def run_dynamic_pick_sort(robot, poses, grid, target, uv, pose_method, pre_offse
         pre_pose = bilinear_pose(grid["points"], "pre_pose", uv[0], uv[1])
         grasp_pose = bilinear_pose(grid["points"], "grasp_pose", uv[0], uv[1])
     else:
-        pre_pose = inverse_distance_pose(grid["points"], "pre_pose", target_center)
-        grasp_pose = inverse_distance_pose(grid["points"], "grasp_pose", target_center)
+        pre_pose = inverse_distance_pose(grid["points"], "pre_pose", target_center, power=idw_power, neighbors=idw_neighbors)
+        grasp_pose = inverse_distance_pose(
+            grid["points"], "grasp_pose", target_center, power=idw_power, neighbors=idw_neighbors
+        )
     pre_pose = apply_pose_offsets(pre_pose, pre_offsets)
     grasp_pose = apply_pose_offsets(grasp_pose, grasp_offsets)
 
@@ -390,6 +416,8 @@ def main():
     parser.add_argument("--uv-margin", type=float, default=0.08)
     parser.add_argument("--pixel-margin", type=float, default=20.0)
     parser.add_argument("--pose-method", choices=["idw", "bilinear"], default="idw")
+    parser.add_argument("--idw-neighbors", type=int, default=4)
+    parser.add_argument("--idw-power", type=float, default=2.0)
     parser.add_argument(
         "--pre-offset",
         action="append",
@@ -510,6 +538,8 @@ def main():
                     args.pose_method,
                     pre_offsets,
                     grasp_offsets,
+                    args.idw_power,
+                    args.idw_neighbors,
                 )
                 break
 

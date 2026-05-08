@@ -26,8 +26,13 @@ RIGHT_KEYS = [
 
 GRID_POINTS = [
     ("top_left", "camera top-left reachable point"),
+    ("top_center", "camera top-center reachable point"),
     ("top_right", "camera top-right reachable point"),
+    ("middle_left", "camera middle-left reachable point"),
+    ("center", "camera center reachable point"),
+    ("middle_right", "camera middle-right reachable point"),
     ("bottom_left", "camera bottom-left reachable point"),
+    ("bottom_center", "camera bottom-center reachable point"),
     ("bottom_right", "camera bottom-right reachable point"),
 ]
 

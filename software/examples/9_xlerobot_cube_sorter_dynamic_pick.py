@@ -22,8 +22,6 @@ RIGHT_KEYS = [
 ]
 SHOULDER_PAN_KEY = "right_arm_shoulder_pan.pos"
 
-CORNER_ORDER = ["top_left", "top_right", "bottom_left", "bottom_right"]
-
 HSV_RANGES = {
     "red": [
         ((0, 80, 60), (10, 255, 255)),
@@ -91,9 +89,8 @@ def load_pick_grid(path):
         grid = json.load(f)
 
     points = grid.get("points", {})
-    missing = [name for name in CORNER_ORDER if name not in points]
-    if missing:
-        raise KeyError(f"Missing pick-grid points in {path}: {missing}")
+    if len(points) < 3:
+        raise KeyError(f"Need at least 3 pick-grid points in {path}, got {len(points)}")
 
     for name in points:
         for key in ("pixel", "pre_pose", "grasp_pose"):
@@ -101,53 +98,59 @@ def load_pick_grid(path):
                 raise KeyError(f"Missing {name}.{key} in {path}")
 
     grid["points"] = normalize_pick_grid_points(points)
-    src = np.float32([grid["points"][name]["pixel"] for name in CORNER_ORDER])
-    dst = np.float32([[0, 0], [1, 0], [0, 1], [1, 1]])
-    homography = cv2.getPerspectiveTransform(src, dst)
+    homography = build_homography_from_points(grid["points"])
     return grid, homography
 
 
 def normalize_pick_grid_points(points):
-    labeled_points = []
-    for label, point in points.items():
-        px, py = point["pixel"]
-        labeled_points.append((label, float(px), float(py), point))
-
-    top_left = min(labeled_points, key=lambda item: item[1] + item[2])
-    top_right = max(labeled_points, key=lambda item: item[1] - item[2])
-    bottom_left = min(labeled_points, key=lambda item: item[1] - item[2])
-    bottom_right = max(labeled_points, key=lambda item: item[1] + item[2])
-
-    mapping = {
-        "top_left": top_left,
-        "top_right": top_right,
-        "bottom_left": bottom_left,
-        "bottom_right": bottom_right,
-    }
     normalized = {}
-    source_labels = {}
-    used_source_labels = set()
-    for canonical_name, (source_label, _px, _py, point) in mapping.items():
-        normalized[canonical_name] = dict(point)
-        normalized[canonical_name]["source_label"] = source_label
-        source_labels[canonical_name] = source_label
-        used_source_labels.add(source_label)
-
-    for source_label, _px, _py, point in labeled_points:
-        if source_label in used_source_labels or source_label in CORNER_ORDER:
-            continue
+    for source_label, point in points.items():
         normalized[source_label] = dict(point)
         normalized[source_label]["source_label"] = source_label
 
-    if any(canonical != source for canonical, source in source_labels.items()):
-        print(f"[GRID] Corner labels were reordered from pixels: {source_labels}")
-    else:
-        print("[GRID] Corner labels match pixel order.")
     print(f"[GRID] Loaded {len(normalized)} calibration points for local interpolation.")
     return normalized
 
 
+def build_homography_from_points(points):
+    if not all(name in points for name in ("top_left", "top_right")):
+        return None
+
+    lower_left_name, lower_right_name = lower_boundary_names(points)
+    if lower_left_name is None or lower_right_name is None:
+        return None
+
+    src = np.float32(
+        [
+            points["top_left"]["pixel"],
+            points["top_right"]["pixel"],
+            points[lower_left_name]["pixel"],
+            points[lower_right_name]["pixel"],
+        ]
+    )
+    dst = np.float32([[0, 0], [1, 0], [0, 1], [1, 1]])
+    print(f"[GRID] Boundary: top_left, top_right, {lower_left_name}, {lower_right_name}")
+    return cv2.getPerspectiveTransform(src, dst)
+
+
+def lower_boundary_names(points):
+    candidates = [(name, point["pixel"][0], point["pixel"][1]) for name, point in points.items()]
+    if len(candidates) < 2:
+        return None, None
+
+    max_y = max(py for _name, _px, py in candidates)
+    lower_band = [item for item in candidates if item[2] >= max_y - 40]
+    if len(lower_band) < 2:
+        lower_band = sorted(candidates, key=lambda item: item[2], reverse=True)[:2]
+
+    left = min(lower_band, key=lambda item: item[1])
+    right = max(lower_band, key=lambda item: item[1])
+    return left[0], right[0]
+
+
 def pixel_to_uv(homography, center):
+    if homography is None:
+        return None
     point = np.float32([[[center[0], center[1]]]])
     mapped = cv2.perspectiveTransform(point, homography)[0][0]
     return float(mapped[0]), float(mapped[1])
@@ -166,6 +169,9 @@ def clamp_uv(uv):
 
 
 def bilinear_pose(points, pose_key, u, v):
+    for name in ("top_left", "top_right", "bottom_left", "bottom_right"):
+        if name not in points:
+            raise KeyError(f"bilinear pose requires {name}; use --pose-method idw for partial grids")
     u = clamp01(u)
     v = clamp01(v)
     tl = points["top_left"][pose_key]
@@ -185,16 +191,9 @@ def bilinear_pose(points, pose_key, u, v):
 
 
 def pixel_grid_polygon(grid):
-    points = grid["points"]
-    return np.array(
-        [
-            points["top_left"]["pixel"],
-            points["top_right"]["pixel"],
-            points["bottom_right"]["pixel"],
-            points["bottom_left"]["pixel"],
-        ],
-        dtype=np.float32,
-    )
+    pixels = np.array([point["pixel"] for point in grid["points"].values()], dtype=np.float32)
+    hull = cv2.convexHull(pixels).reshape(-1, 2)
+    return hull
 
 
 def inside_pixel_grid(grid, center, margin_px):
@@ -317,7 +316,7 @@ def draw_scene(frame, detections, grid, target, uv, stable_count, stable_frames)
 
     for name, point in points.items():
         px, py = point["pixel"]
-        color = (255, 255, 255) if name in CORNER_ORDER else (0, 255, 255)
+        color = (255, 255, 255) if name in ("top_left", "top_right") else (0, 255, 255)
         cv2.circle(output, (px, py), 6, color, 2)
         cv2.putText(output, name, (px + 6, py - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
 
@@ -525,8 +524,11 @@ def main():
                 break
 
             if key == ord("s"):
-                if not target or stable_count < args.stable_frames or uv is None:
+                if not target or stable_count < args.stable_frames:
                     print("[PC] Target is not stable yet.")
+                    continue
+                if args.pose_method == "bilinear" and uv is None:
+                    print("[PC] Bilinear mode needs a rectangular grid with homography. Use --pose-method idw.")
                     continue
                 if args.pose_method == "bilinear" and not inside_uv_with_margin(uv, args.uv_margin):
                     print(

@@ -31,9 +31,11 @@ HSV_RANGES = {
         ((35, 60, 50), (85, 255, 255)),
     ],
     "blue": [
-        ((90, 60, 50), (130, 255, 255)),
+        ((95, 120, 100), (130, 255, 255)),
     ],
 }
+DEFAULT_BLUE_MIN_SATURATION = 120
+DEFAULT_BLUE_MIN_VALUE = 100
 
 DRAW_COLORS = {
     "red": (0, 0, 255),
@@ -42,7 +44,12 @@ DRAW_COLORS = {
 }
 
 
-def detect_colored_cubes(frame, min_area):
+def detect_colored_cubes(
+    frame,
+    min_area,
+    blue_min_saturation=DEFAULT_BLUE_MIN_SATURATION,
+    blue_min_value=DEFAULT_BLUE_MIN_VALUE,
+):
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     detections = []
 
@@ -50,6 +57,12 @@ def detect_colored_cubes(frame, min_area):
         mask_total = np.zeros(hsv.shape[:2], dtype=np.uint8)
 
         for lower, upper in ranges:
+            if color_name == "blue":
+                lower = (
+                    lower[0],
+                    max(lower[1], blue_min_saturation),
+                    max(lower[2], blue_min_value),
+                )
             mask_total |= cv2.inRange(
                 hsv,
                 np.array(lower, dtype=np.uint8),
@@ -411,6 +424,8 @@ def main():
     parser.add_argument("--camera", default="head_cam")
     parser.add_argument("--stable-frames", type=int, default=8)
     parser.add_argument("--min-area", type=int, default=500)
+    parser.add_argument("--blue-min-saturation", type=int, default=DEFAULT_BLUE_MIN_SATURATION)
+    parser.add_argument("--blue-min-value", type=int, default=DEFAULT_BLUE_MIN_VALUE)
     parser.add_argument("--uv-margin", type=float, default=0.08)
     parser.add_argument("--pixel-margin", type=float, default=20.0)
     parser.add_argument("--pose-method", choices=["idw", "bilinear"], default="idw")
@@ -501,7 +516,12 @@ def main():
                 time.sleep(0.05)
                 continue
 
-            detections = detect_colored_cubes(frame, args.min_area)
+            detections = detect_colored_cubes(
+                frame,
+                args.min_area,
+                args.blue_min_saturation,
+                args.blue_min_value,
+            )
             history.append(detections[0] if detections else None)
             target, stable_count = most_stable_target(history, args.stable_frames)
             uv = pixel_to_uv(homography, target["center"]) if target else None

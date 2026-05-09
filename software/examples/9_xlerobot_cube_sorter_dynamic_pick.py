@@ -303,15 +303,7 @@ def most_stable_target(history, stable_frames):
 def draw_scene(frame, detections, grid, target, uv, stable_count, stable_frames):
     output = frame.copy()
     points = grid["points"]
-    polygon = np.array(
-        [
-            points["top_left"]["pixel"],
-            points["top_right"]["pixel"],
-            points["bottom_right"]["pixel"],
-            points["bottom_left"]["pixel"],
-        ],
-        dtype=np.int32,
-    )
+    polygon = pixel_grid_polygon(grid).astype(np.int32)
     cv2.polylines(output, [polygon], isClosed=True, color=(255, 255, 255), thickness=2)
 
     for name, point in points.items():

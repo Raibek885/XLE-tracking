@@ -239,6 +239,11 @@ def apply_pose_offsets(pose, offsets):
     return result
 
 
+def blend_pose(start_pose, end_pose, alpha):
+    alpha = max(0.0, min(1.2, alpha))
+    return {key: start_pose[key] + (end_pose[key] - start_pose[key]) * alpha for key in RIGHT_KEYS}
+
+
 def add_offset(offsets, joint, value):
     if value:
         offsets[joint] = offsets.get(joint, 0.0) + value
@@ -352,6 +357,7 @@ def run_dynamic_pick_sort(
     grasp_offsets,
     idw_power,
     idw_neighbors,
+    grasp_depth,
 ):
     open_gripper = poses["gripper_open"]
     closed_gripper = poses["gripper_closed"]
@@ -369,13 +375,14 @@ def run_dynamic_pick_sort(
         )
     pre_pose = apply_pose_offsets(pre_pose, pre_offsets)
     grasp_pose = apply_pose_offsets(grasp_pose, grasp_offsets)
+    effective_grasp_pose = blend_pose(pre_pose, grasp_pose, grasp_depth)
 
     sequence = [
         ("home", pose_with_gripper(poses["home"], open_gripper), 2.0),
         ("observe", pose_with_gripper(poses["observe"], open_gripper), 2.0),
         ("dynamic_pre_grasp", pose_with_gripper(pre_pose, open_gripper), 2.5),
-        ("dynamic_grasp", pose_with_gripper(grasp_pose, open_gripper), 2.5),
-        ("close_gripper", pose_with_gripper(grasp_pose, closed_gripper), 1.0),
+        ("dynamic_grasp", pose_with_gripper(effective_grasp_pose, open_gripper), 2.5),
+        ("close_gripper", pose_with_gripper(effective_grasp_pose, closed_gripper), 1.0),
         ("dynamic_lift", pose_with_gripper(pre_pose, closed_gripper), 2.0),
         (drop_pose_name, pose_with_gripper(poses[drop_pose_name], closed_gripper), 3.0),
         ("open_gripper", pose_with_gripper(poses[drop_pose_name], open_gripper), 1.0),
@@ -384,7 +391,7 @@ def run_dynamic_pick_sort(
 
     print(
         f"[SORT] {target_color} center={target_center} "
-        f"uv=({uv[0]:.3f}, {uv[1]:.3f}) method={pose_method} -> {drop_pose_name}"
+        f"uv=({uv[0]:.3f}, {uv[1]:.3f}) method={pose_method} grasp_depth={grasp_depth:.2f} -> {drop_pose_name}"
     )
     print(
         "[SORT] pre_pose shoulder_pan/lift/elbow="
@@ -394,10 +401,10 @@ def run_dynamic_pick_sort(
     )
     print(
         "[SORT] grasp_pose shoulder_pan/lift/elbow/wrist_flex="
-        f"{grasp_pose['right_arm_shoulder_pan.pos']:.2f}/"
-        f"{grasp_pose['right_arm_shoulder_lift.pos']:.2f}/"
-        f"{grasp_pose['right_arm_elbow_flex.pos']:.2f}/"
-        f"{grasp_pose['right_arm_wrist_flex.pos']:.2f}"
+        f"{effective_grasp_pose['right_arm_shoulder_pan.pos']:.2f}/"
+        f"{effective_grasp_pose['right_arm_shoulder_lift.pos']:.2f}/"
+        f"{effective_grasp_pose['right_arm_elbow_flex.pos']:.2f}/"
+        f"{effective_grasp_pose['right_arm_wrist_flex.pos']:.2f}"
     )
     for name, pose, duration in sequence:
         print(f"[SORT] Moving to {name}")
@@ -418,6 +425,12 @@ def main():
     parser.add_argument("--pose-method", choices=["idw", "bilinear"], default="idw")
     parser.add_argument("--idw-neighbors", type=int, default=4)
     parser.add_argument("--idw-power", type=float, default=2.0)
+    parser.add_argument(
+        "--grasp-depth",
+        type=float,
+        default=1.0,
+        help="Fraction from pre-grasp to grasp pose. Use 0.85-0.95 if the gripper presses the cube.",
+    )
     parser.add_argument(
         "--pre-offset",
         action="append",
@@ -540,6 +553,7 @@ def main():
                     grasp_offsets,
                     args.idw_power,
                     args.idw_neighbors,
+                    args.grasp_depth,
                 )
                 break
 

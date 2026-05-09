@@ -35,6 +35,7 @@ GRID_POINTS = [
     ("bottom_center", "camera bottom-center reachable point"),
     ("bottom_right", "camera bottom-right reachable point"),
 ]
+GRID_POINT_NAMES = [name for name, _description in GRID_POINTS]
 
 HSV_RANGES = {
     "red": [
@@ -182,11 +183,21 @@ def build_keymap(joint_step, gripper_step):
     }
 
 
+def load_existing_grid(path):
+    if not path:
+        return {}
+    with open(path, "r", encoding="utf-8") as f:
+        payload = json.load(f)
+    return payload.get("points", {})
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--pi-ip", required=True)
     parser.add_argument("--camera", default="head_cam")
+    parser.add_argument("--in-file", default=None)
     parser.add_argument("--out", default="software/examples/cube_sorter_pick_grid.json")
+    parser.add_argument("--points", nargs="+", choices=GRID_POINT_NAMES, default=None)
     parser.add_argument("--joint-step", type=float, default=2.0)
     parser.add_argument("--gripper-step", type=float, default=2.0)
     parser.add_argument("--min-area", type=int, default=500)
@@ -212,13 +223,18 @@ def main():
     robot.connect()
 
     current_pose = capture_pose(robot)
-    saved_points = {}
+    saved_points = load_existing_grid(args.in_file)
+    points_to_record = [(name, description) for name, description in GRID_POINTS if args.points is None or name in args.points]
+    if args.in_file:
+        print(f"Loaded existing grid from {args.in_file}: {len(saved_points)} points")
+    if args.points:
+        print(f"Updating only points: {', '.join(args.points)}")
     old_settings = termios.tcgetattr(sys.stdin)
     tty.setraw(sys.stdin.fileno())
 
     try:
-        for point_name, description in GRID_POINTS:
-            saved_points[point_name] = {}
+        for point_name, description in points_to_record:
+            saved_points[point_name] = dict(saved_points.get(point_name, {}))
 
             for stage_name in ("pre_pose", "grasp_pose"):
                 termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
